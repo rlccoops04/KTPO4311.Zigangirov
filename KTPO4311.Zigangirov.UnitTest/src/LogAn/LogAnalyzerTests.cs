@@ -8,79 +8,164 @@ namespace KTPO4311.Zigangirov.UnitTest.src.LogAn
     public class LogAnalyzerTests
     {
         [Test]
-        public void IsValidFileName_BadExtension_ReturnsFalse()
+        public void IsValidFileName_NameSupportedExtension_ReturnsTrue()
         {
             //Подготовка теста
-            LogAnalyzer analyzer = new LogAnalyzer();
+            FakeExtensionManager fakeManager = new FakeExtensionManager();
+            fakeManager.WillBeValid = true;
+            //..конфигурируем фабрику для создания поддельных объектов 
+            ExtensionManagerFactory.SetManager(fakeManager);
+            LogAnalyzer log = new LogAnalyzer();
 
             //Воздействие на тестируемый объект
-            bool result = analyzer.IsValidLogFileName("filewithbadextension.FOO");
+            bool result = log.IsValidLogFileName("short.zigangirov");
 
-            //Проверка ожидаемого результата
+            //Проверка ожидаемого результата 
+            Assert.True(result);
+        }   
+        [Test]
+        public void IsValidFileName_NameSupportedExtension_ReturnsFalse()
+        {
+            //Подготовка теста
+            FakeExtensionManager fakeManager = new FakeExtensionManager();
+            fakeManager.WillBeValid = false;
+            //..конфигурируем фабрику для создания поддельных объектов 
+            ExtensionManagerFactory.SetManager(fakeManager);
+            LogAnalyzer log = new LogAnalyzer();
+
+            //Воздействие на тестируемый объект
+            bool result = log.IsValidLogFileName("short.zigangirov");
+
+            //Проверка ожидаемого результата 
             Assert.False(result);
         }
-
-
         [Test]
-        public void IsValidLogFileName_GoodExtensionUppercase_ReturnsTrue()
+        public void IsValidFileName_ExtManagerThrowsException_ReturnsFalse()
         {
             //Подготовка теста
-            LogAnalyzer analyzer = new LogAnalyzer();
+            FakeExtensionManager fakeManager = new FakeExtensionManager();
+            fakeManager.WillThrow = new Exception();
+            //..конфигурируем фабрику для создания поддельных объектов 
+            ExtensionManagerFactory.SetManager(fakeManager);
+            LogAnalyzer log = new LogAnalyzer();
+            bool result = log.IsValidLogFileName("short.zigangirov");
+
+            //Проверка ожидаемого результата 
+            Assert.IsFalse(result);
+        }
+
+        [Test]
+        public void Analyze_TooShortFileName_CallsWebService()
+        {
+            //Подготовка теста
+            FakeWebService mockWebService = new FakeWebService();
+            WebServiceFactory.SetService(mockWebService);
+            LogAnalyzer log = new LogAnalyzer();
+            string fileName = "abc.zigangirov";
 
             //Воздействие на тестируемый объект
-            bool result = analyzer.IsValidLogFileName("filewithbadextension.ZIGANGIROV");
+            log.Analyze(fileName);
 
             //Проверка ожидаемого результата
-            Assert.True(result);
+            StringAssert.Contains("Слишком короткое имя файла: abc.zigangirov", mockWebService.LastError);
+
         }
-
-
         [Test]
-        public void IsValidLogFileName_GoodExtensionLowercase_ReturnsTrue()
+        public void Analyze_WebServiceThrows_SendsEmail()
         {
             //Подготовка теста
-            LogAnalyzer analyzer = new LogAnalyzer();
+            FakeWebService stubWebService = new FakeWebService();
+            WebServiceFactory.SetService(stubWebService);
+            stubWebService.WillThrow = new Exception("Это подделка");
 
-            //Воздействие на тестируемый объект
-            bool result = analyzer.IsValidLogFileName("filewithbadextension.zigangirov");
+            FakeEmailService mockEmail = new FakeEmailService();
+            EmailServiceFactory.SetEmail(mockEmail);
+
+            LogAnalyzer log = new LogAnalyzer();
+            string tooShortFileName = "abc.zigangirov";
+
+            //Воздействие на тестируемый объект 
+            log.Analyze(tooShortFileName);
 
             //Проверка ожидаемого результата
-            Assert.True(result);
+            StringAssert.Contains("someone@somewhere.zigangirov", mockEmail.to);
+            StringAssert.Contains("Это подделка", mockEmail.body);
+            StringAssert.Contains("Невозможно вызвать веб-сервис", mockEmail.subject);
         }
-
         [Test]
-        public void IsValidFileName_EmptyFileName_Throws()
+        public void Analyze_WhenAnalyzed_FiredEvent()
         {
-            //Подготовка теста
-            LogAnalyzer analyzer = new LogAnalyzer();
+            bool analyzedFired = false;
+            LogAnalyzer logAnalyzer = new LogAnalyzer();
+            logAnalyzer.Analyzed += delegate ()
+            {
+                analyzedFired = true;
+            };
 
-            //Функция catch перехватывает и возвращает исключение, которое было возбуждено внутри лямбда-выражения
-            var ex = Assert.Catch<Exception>(() => analyzer.IsValidLogFileName(""));
+            logAnalyzer.Analyze("valid.zigangirov");
 
-            //Проверка, что исключение содержит ожидаемую строку
-            StringAssert.Contains("имя файла должно быть задано", ex.Message);
+            Assert.IsTrue(analyzedFired);
         }
 
-        [TestCase("filewithgoodextension.ZIGANGIROV")]
-        [TestCase("filewithgoodextension.zigangirov")]
-        public void IsValidLogFileName_ValidExtension_ReturnsTrue(string file)
+
+        [TearDown]
+        public void AfterEachTest()
         {
-            LogAnalyzer analyzer = new LogAnalyzer();
-
-            bool result = analyzer.IsValidLogFileName(file);
-
-            Assert.True(result);
+            ExtensionManagerFactory.SetManager(null);
+            WebServiceFactory.SetService(null);
+            EmailServiceFactory.SetEmail(null);
         }
+    }
 
-        [TestCase("badfile.foo", false)]
-        [TestCase("goodfale.zigangirov", true)]
-        public void IsValidFileName_WhenCalled_ChangesWasLastFileNameValid(string file, bool expected)
+
+
+    /// <summary> Поддельный менеджер расширений </summary>
+    internal class FakeExtensionManager : IExtensionManager
+    {
+        ///<summary>  Это поле позволяет настроить 
+        /// поддельный результат для метода IsValid </summary>
+        public bool WillBeValid = false;
+
+        /// <summary>Это поле позволяет настроить 
+        /// поддельное исключение вызываемое в методе IsValid</summary>
+        public Exception WillThrow = null;
+        public bool IsValid(string fileName)
         {
-            LogAnalyzer analyzer = new LogAnalyzer();
+            if(WillThrow != null)
+            {
+                throw WillThrow;
+            }
 
-            analyzer.IsValidLogFileName(file);
+            return WillBeValid;
+        }
+    }
+    /// <summary> Поддельная веб-служба </summary>
+    internal class FakeWebService : IWebService
+    {
+        ///<summary>  Это поле запоминает состояние после вызова метода LogError 
+        /// при тестировании взаимодействия утверждения высказываются относительно</summary>
+        public string LastError;
+        public Exception WillThrow = null;
+        public void LogError(string message)
+        {
+            if (WillThrow != null)
+            {
+                throw WillThrow;
+            }
 
-            Assert.AreEqual(expected, analyzer.WasLastFileNameValid);
+            LastError = message;
+        }
+    }
+    internal class FakeEmailService : IEmailService
+    {
+        public string to;
+        public string subject;
+        public string body;
+        public void SendEmail(string to, string subject, string body)
+        {
+            this.to = to;
+            this.subject = subject;
+            this.body = body;
         }
     }
 }
